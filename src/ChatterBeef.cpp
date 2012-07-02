@@ -8,48 +8,64 @@
 
 #include <unistd.h>
 #include <cstdlib>
+#include <stdio.h>
 #include <iostream>
 #include <sstream>
 #include <pthread.h>
 #include <sys/socket.h>				// socket()
 #include <netinet/in.h>				// sockaddr_in type
-
-//#include <sys/types.h>
-//#include <arpa/inet.h>
+#include <sys/types.h>
+#include <sys/time.h>
+#include <arpa/inet.h>
 #include <netdb.h>
+#include "ChatBox.h"
+#include <vector.h>
 
 /*************************************/
-int SERVERPORT = 5000;			// Port number to listen on
-int LISTENQUEUE = 10;			// Number of incoming connections to queue
-int MESSAGEBUFFER = 1024;		// Maximum data received per message
+enum{
+	SERVERPORT = 5004,			// Port number to listen on
+	LISTENQUEUE = 10,			// Number of incoming connections to queue
+	MESSAGEBUFFER = 1024,		// Maximum data received per message
+	MAXROOMS = 10,				// Max number of chatrooms to create
+	MAXCLIENTS = 10,			// Max number of clients per room
+};
 /*************************************/
 
 using namespace std;
 
+vector<ChatBox*> chatList(MAXROOMS, NULL);
+
 void* handleNewConnection(void* voidConnectFd){
 	pthread_detach(pthread_self());
-
 	int connectFd = *((int*) voidConnectFd);
+
+	string hello = "ChatterBeef Server\nMenu:\nCreate <name>\nReview\nDestroy <name>\n";
+	int bytesSent = send(connectFd, hello.c_str(), strlen(hello.c_str()), 0);
+	if(bytesSent <= 0){
+		cout << "New connection closed after welcome message";
+		return NULL;
+	}
+
 	char chBuffer[MESSAGEBUFFER];
 	bzero(&chBuffer, MESSAGEBUFFER);
-	int chReceived = read(connectFd, &chBuffer, MESSAGEBUFFER);
-	if(chReceived < 0){
+	int bytesReceived = recv(connectFd, &chBuffer, MESSAGEBUFFER, 0);
+	if(bytesReceived < 0){
 		perror("Transmission error from client");
-	}else if(chReceived == 0){
+	}else if(bytesReceived == 0){
 		cout << "Client closed connection" << endl;
 	}else{
-		cout << "Received " << chReceived << " characters: " << chBuffer << endl;
+		cout << "Received " << bytesReceived << " bytes: " << chBuffer << endl;
 
 		string reply = "Received ";
 		stringstream ss;
-		ss << chReceived;
+		ss << bytesReceived;
 		reply += ss.str() + " characters\n";
-		int chSent = write(connectFd, reply.c_str(), strlen(reply.c_str()));
-		cout << "Replied with " << chSent << " characters" << endl;
+		int bytesSent = send(connectFd, reply.c_str(), strlen(reply.c_str()), 0);
+		cout << "Replied with " << bytesSent << " bytes" << endl;
 	}
-
-	shutdown(connectFd, 2);
+	close(connectFd);
 	pthread_exit(NULL);
+	return NULL;
 }
 
 void listenLoop(int _listenSocket){
@@ -57,69 +73,53 @@ void listenLoop(int _listenSocket){
 		perror("Bad socket to receive clients");
 		return;
 	}
+	struct timeval timeout;
+	timeout.tv_sec = 5;
+	timeout.tv_usec = 0;
+
+	fd_set masterfds;
+	fd_set tempfds;
+//	FD_ZERO(&masterfds);					// Compiler error : '__builtin_bzero' could not be resolved
+	bzero(&masterfds, sizeof(masterfds));	// work-around
+	FD_SET(_listenSocket, &masterfds);
+	int maxfd = _listenSocket;
 
 	while(true){
-		sockaddr_in clientSocket;
-		int len = sizeof(clientSocket);
-		int connectFd = accept(_listenSocket, (struct sockaddr*) &clientSocket,
-				(socklen_t *) &len);
-		if(connectFd < 0){
-			perror("Failed to accept incoming connection");
-			continue;
+		cout << "loop\n";
+		tempfds = masterfds;
+		int selectInt = select(maxfd+1, &tempfds, NULL, NULL, &timeout);
+//		if(select(maxfd, &tempfds, NULL, NULL, &timeout) == -1){
+		if(selectInt < 0){
+			perror("Error in main loop select()");
+			exit(1);
 		}
-		cout << "New client connected" << endl;
+		cout << "select int = " << selectInt << endl;
+//		for(int i=0; i<maxfd; ++i){
+			if(FD_ISSET(_listenSocket, &tempfds)){
+				sockaddr_in clientSocket;
+				int len = sizeof(clientSocket);
+				int connectFd = accept(_listenSocket, (struct sockaddr*) &clientSocket, (socklen_t *) &len);
+				if(connectFd < 0){
+					perror("Failed to accept incoming connection");
+					continue;
+				}
+				cout << "New client connected" << endl;
 
-		pthread_t connectThread;
-		if(pthread_create(&connectThread, NULL, handleNewConnection, (void*) &connectFd ) != 0){
-			perror("Failed to create new thread for incoming request");
-			close(connectFd);
-			continue;
-		}
+				pthread_t connectThread;
+				if(pthread_create(&connectThread, NULL, handleNewConnection, (void*) &connectFd ) != 0){
+					perror("Failed to create new thread for incoming request");
+					close(connectFd);
+					continue;
+				}
+			}
+//		}
 	}
-
 }
-
-int createListenSocket(){
-	int listenFd = socket(AF_INET, SOCK_STREAM, 0);
-	if(listenFd < 0){
-		perror("Bad socket");
-		return listenFd;
-	}
-
-	sockaddr_in serverAddress;
-	bzero((char*)&serverAddress, sizeof(sockaddr_in));
-	serverAddress.sin_family = AF_INET;
-	serverAddress.sin_port = htons(SERVERPORT);
-	serverAddress.sin_addr.s_addr = INADDR_ANY;
-
-	int bindTest = bind(listenFd, (struct sockaddr*)&serverAddress, sizeof(serverAddress));
-	if(bindTest < 0){
-		perror("Bind to port failed");
-		return bindTest;
-	}
-
-	int listenTest = listen(listenFd, LISTENQUEUE);
-	if(listenTest <0){
-		perror("Listen for incoming connections failed");
-		return listenTest;
-	}
-
-	char chHostname[100];
-	if(gethostname(chHostname, 100) < 0){
-		perror("Failed to get hostname");
-	}else{
-		cout << "Listening on " << chHostname << ", " <<
-				(gethostbyname(chHostname))->h_name << endl;
-	}
-
-	return listenFd;
-}
-
 
 int main() {
 	cout << "hello world" << endl; // prints hello world
 
-	listenLoop( createListenSocket() );
+	listenLoop( ChatBox::createListenSocket( SERVERPORT, LISTENQUEUE) );
 
 	return 0;
 }
