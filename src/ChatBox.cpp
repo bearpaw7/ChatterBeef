@@ -8,15 +8,18 @@
 #include "ChatBox.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <iostream.h>
+#include <iostream>
 #include <netdb.h>
 
 
-ChatBox::ChatBox(int _port, std::string _name, int _maxClients) {
+ChatBox::ChatBox(int _port, int _listenQueue, std::string _name, int _maxClients) {
+	int listenSocket = createListenSocket(_port, _listenQueue);
+	if(listenSocket < 0){
+		return;
+	}
 	this->port = _port;
 	this->name = _name;
 	this->maxClients = _maxClients;
-
 }
 
 ChatBox::~ChatBox() {

@@ -19,7 +19,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include "ChatBox.h"
-#include <vector.h>
+#include <vector>
 
 /*************************************/
 enum{
@@ -31,7 +31,12 @@ enum{
 };
 /*************************************/
 
-using namespace std;
+//using namespace std;  // It has been suggested to me that this line is bad.
+using std::cout;
+using std::endl;
+using std::string;
+using std::stringstream;
+using std::vector;
 
 vector<ChatBox*> chatList(MAXROOMS, NULL);
 
